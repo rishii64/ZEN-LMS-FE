@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { io } from 'socket.io-client';
 import {
   Award, BarChart3, Bell, BookOpen, Building2, CheckSquare, CreditCard,
-  Globe, GraduationCap, LayoutDashboard, Layers, LogOut, Menu, Moon,
+  Globe, GraduationCap, LayoutDashboard, Layers, LogOut, Megaphone, Menu, Moon,
   Network, Search, Settings, Shield, ShieldCheck, Sun, UserCheck, Users,
   ClipboardCheck, MessageSquare, ChevronRight, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
@@ -14,11 +15,25 @@ import { api } from '../../api/client.js';
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const { user, memberships, activeOrg, activeMembership, terminology, hasPermission, hasEntitlement, announcements } = useAuthContext();
-  const { theme, toggleTheme, sidebarCollapsed, toggleSidebar, clearAuth, setActiveOrganizationId, addToast } = useAppStore();
+  const { accessToken, theme, toggleTheme, sidebarCollapsed, toggleSidebar, clearAuth, setActiveOrganizationId, addToast } = useAppStore();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
+  const [liveAnnouncements, setLiveAnnouncements] = useState([]);
+  const [seenAnnIds, setSeenAnnIds] = useState(() => new Set());
+  const notifRef = useRef(null);
+
+  const seenStorageKey = user?.id ? `lms_seen_ann_${user.id}` : null;
+
+  useEffect(() => {
+    if (!seenStorageKey) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(seenStorageKey) || '[]');
+      if (Array.isArray(saved)) setSeenAnnIds(new Set(saved));
+    } catch { /* ignore */ }
+  }, [seenStorageKey]);
 
   const notifQuery = useQuery({
     queryKey: ['notifications', activeOrg?.id],
@@ -26,7 +41,86 @@ export function AppShell() {
     enabled: Boolean(user && activeOrg?.id)
   });
 
-  const unreadCount = (notifQuery.data?.data || []).filter((n) => !n.is_read).length;
+  // Real-time Socket.IO connection for announcements and user notifications
+  useEffect(() => {
+    if (!accessToken || !user?.id) return;
+    const socket = io('/', {
+      path: '/socket.io',
+      auth: {
+        token: accessToken,
+        organizationId: activeOrg?.id || null
+      },
+      transports: ['websocket', 'polling']
+    });
+
+    socket.on('platform:announcement', (ann) => {
+      if (!ann?.id) return;
+      setLiveAnnouncements((prev) => [ann, ...prev.filter((p) => p.id !== ann.id)]);
+      qc.invalidateQueries({ queryKey: ['auth', 'me'] });
+      qc.invalidateQueries({ queryKey: ['platform', 'announcements'] });
+      addToast({
+        title: `Announcement: ${ann.title}`,
+        message: ann.body,
+        type: ann.severity === 'warning' ? 'warning' : ann.severity === 'error' ? 'error' : 'info'
+      });
+    });
+
+    socket.on('notification:new', (notif) => {
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+      if (notif?.title) {
+        addToast({
+          title: notif.title,
+          message: notif.body || '',
+          type: 'info'
+        });
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [accessToken, user?.id, activeOrg?.id, qc, addToast]);
+
+  // Close notification dropdown on outside click
+  useEffect(() => {
+    if (!notifOpen) return;
+    const onDocClick = (e) => {
+      if (notifRef.current && !notifRef.current.contains(e.target)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [notifOpen]);
+
+  const mergedAnnouncements = useMemo(() => {
+    const map = new Map();
+    for (const a of [...liveAnnouncements, ...(announcements || [])]) {
+      if (a?.id && !map.has(a.id)) map.set(a.id, a);
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.published_at || 0).getTime() - new Date(a.published_at || 0).getTime()
+    );
+  }, [liveAnnouncements, announcements]);
+
+  const userNotifications = notifQuery.data?.data || [];
+  const unreadNotifCount = userNotifications.filter((n) => !n.is_read).length;
+  const unreadAnnCount = mergedAnnouncements.filter((a) => !seenAnnIds.has(a.id)).length;
+  const unreadCount = unreadNotifCount + unreadAnnCount;
+
+  const markAllRead = async () => {
+    const nextSeen = new Set(seenAnnIds);
+    mergedAnnouncements.forEach((a) => nextSeen.add(a.id));
+    setSeenAnnIds(nextSeen);
+    if (seenStorageKey) {
+      localStorage.setItem(seenStorageKey, JSON.stringify(Array.from(nextSeen)));
+    }
+    const unreadNotifs = userNotifications.filter((n) => !n.is_read);
+    if (unreadNotifs.length > 0 && activeOrg?.id) {
+      await Promise.allSettled(unreadNotifs.map((n) => api.patch(`/notifications/${n.id}/read`, {})));
+      qc.invalidateQueries({ queryKey: ['notifications'] });
+    }
+  };
 
   const navGroups = [];
 
@@ -249,7 +343,7 @@ export function AppShell() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 shrink-0">
             {/* Global Search */}
             <form
               onSubmit={(e) => {
@@ -293,7 +387,7 @@ export function AppShell() {
             </button>
 
             {/* Notifications */}
-            <div className="relative">
+            <div className="relative" ref={notifRef}>
               <button
                 onClick={() => setNotifOpen(!notifOpen)}
                 aria-label="Notifications"
@@ -301,28 +395,73 @@ export function AppShell() {
               >
                 <Bell className="w-4 h-4" />
                 {unreadCount > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-rose-600 text-white text-[10px] flex items-center justify-center">
-                    {unreadCount}
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">
+                    {unreadCount > 99 ? '99+' : unreadCount}
                   </span>
                 )}
               </button>
               {notifOpen && (
-                <div className="absolute right-0 mt-2 w-80 card shadow-xl p-3 z-50">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Notifications</p>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {(notifQuery.data?.data || []).length === 0 && announcements.length === 0 ? (
-                      <p className="text-xs text-slate-500 py-3 text-center">No notifications</p>
+                <div className="absolute right-0 mt-2 w-[calc(100vw-2rem)] sm:w-96 max-w-sm card shadow-xl p-3.5 z-50">
+                  <div className="flex items-center justify-between mb-2.5 pb-2 border-b border-slate-100 dark:border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Notifications</p>
+                      {unreadCount > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-300">
+                          {unreadCount} new
+                        </span>
+                      )}
+                    </div>
+                    {unreadCount > 0 && (
+                      <button
+                        type="button"
+                        onClick={markAllRead}
+                        className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        Mark all read
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+                    {userNotifications.length === 0 && mergedAnnouncements.length === 0 ? (
+                      <p className="text-xs text-slate-500 py-4 text-center">No notifications</p>
                     ) : (
                       <>
-                        {announcements.map((a) => (
-                          <div key={a.id} className="p-2.5 rounded-lg bg-blue-50/70 dark:bg-blue-950/40 text-xs">
-                            <p className="font-semibold text-blue-900 dark:text-blue-200">{a.title}</p>
-                            <p className="text-blue-700 dark:text-blue-300 mt-0.5">{a.body}</p>
-                          </div>
-                        ))}
-                        {(notifQuery.data?.data || []).map((n) => (
-                          <div key={n.id} className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 text-xs">
-                            <p className="font-semibold">{n.title}</p>
+                        {mergedAnnouncements.map((a) => {
+                          const isUnread = !seenAnnIds.has(a.id);
+                          return (
+                            <div
+                              key={a.id}
+                              className={`p-2.5 rounded-xl border text-xs transition ${
+                                isUnread
+                                  ? 'bg-blue-50/90 border-blue-200 dark:bg-blue-950/50 dark:border-blue-800'
+                                  : 'bg-slate-50/70 border-slate-200/60 dark:bg-slate-800/40 dark:border-slate-800'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2 mb-0.5">
+                                <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">
+                                  <Megaphone className="w-3 h-3" />
+                                  Announcement
+                                </span>
+                                {isUnread && <span className="w-2 h-2 rounded-full bg-blue-600 shrink-0" />}
+                              </div>
+                              <p className="font-semibold text-slate-900 dark:text-white">{a.title}</p>
+                              <p className="text-slate-600 dark:text-slate-300 mt-0.5">{a.body}</p>
+                            </div>
+                          );
+                        })}
+                        {userNotifications.map((n) => (
+                          <div
+                            key={n.id}
+                            className={`p-2.5 rounded-xl border text-xs ${
+                              !n.is_read
+                                ? 'bg-amber-50/60 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800'
+                                : 'bg-slate-50 border-slate-200/60 dark:bg-slate-800/60 dark:border-slate-800'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-semibold text-slate-900 dark:text-white">{n.title}</p>
+                              {!n.is_read && <span className="w-2 h-2 rounded-full bg-rose-500 shrink-0" />}
+                            </div>
                             <p className="text-slate-500 dark:text-slate-400 mt-0.5">{n.body}</p>
                           </div>
                         ))}
@@ -333,15 +472,14 @@ export function AppShell() {
               )}
             </div>
 
-            {/* User Pill */}
-            <Link to="/profile" className="hidden sm:flex items-center gap-2 pl-2 border-l border-slate-200 dark:border-slate-800">
-              <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-xs font-bold">
-                {(user?.fullName || 'U').slice(0, 2).toUpperCase()}
-              </div>
-              <div className="text-xs text-left leading-tight">
-                <p className="font-semibold text-slate-900 dark:text-white">{user?.fullName}</p>
-                <p className="text-slate-500 truncate max-w-[140px]">{user?.email || user?.phone}</p>
-              </div>
+            {/* Compact Profile Avatar Link (Details shown on dedicated /profile page) */}
+            <Link
+              to="/profile"
+              title={`${user?.fullName || 'Profile'} (${user?.email || user?.phone || ''})`}
+              aria-label="User profile"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white text-xs font-bold shadow-sm ring-2 ring-white dark:ring-slate-900 hover:brightness-110 transition shrink-0"
+            >
+              {(user?.fullName || 'U').slice(0, 2).toUpperCase()}
             </Link>
           </div>
         </header>

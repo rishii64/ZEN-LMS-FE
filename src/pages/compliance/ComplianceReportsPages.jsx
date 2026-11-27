@@ -204,7 +204,7 @@ export function EngagementPage() {
 export function ProfileSecurityPage() {
   const qc = useQueryClient();
   const addToast = useAppStore((s) => s.addToast);
-  const { user } = useAuthContext();
+  const { user, activeOrg, activeMembership, memberships, roles } = useAuthContext();
   const [mfaSetup, setMfaSetup] = useState(null);
   const [totpCode, setTotpCode] = useState('');
 
@@ -218,7 +218,7 @@ export function ProfileSecurityPage() {
   const enableMfa = async (e) => {
     e.preventDefault();
     try {
-      await api.post('/auth/mfa/enable', { code: totpCode });
+      await api.post('/auth/mfa/verify', { code: totpCode });
       setMfaSetup(null);
       setTotpCode('');
       qc.invalidateQueries({ queryKey: ['auth', 'me'] });
@@ -238,22 +238,88 @@ export function ProfileSecurityPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Profile, MFA & Active Sessions</h1>
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">User Profile & Security</h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Account details, organization memberships, MFA, and active login sessions.</p>
+      </div>
 
-      <div className="card p-6 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h3 className="font-bold">{user?.fullName}</h3>
-            <p className="text-sm text-slate-500">{user?.email || user?.phone} · MFA: {user?.mfaEnabled ? 'Enabled' : 'Disabled'}</p>
+      {/* User Identity & Details Card */}
+      <div className="card p-6 space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-100 dark:border-slate-800">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-bold text-lg flex items-center justify-center shrink-0 shadow-md shadow-blue-600/20">
+              {(user?.fullName || 'U').slice(0, 2).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white truncate">{user?.fullName}</h2>
+                {user?.isPlatformAdmin && (
+                  <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800">
+                    Platform Super Admin
+                  </span>
+                )}
+                {activeMembership?.is_org_admin && (
+                  <span className="px-2 py-0.5 text-[11px] font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-950/60 dark:text-blue-300 dark:border-blue-800">
+                    Tenant Admin
+                  </span>
+                )}
+                {(roles || []).filter((r) => r.slug !== 'tenant_admin').map((r) => (
+                  <span key={r.id || r.slug} className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+                    {r.name}
+                  </span>
+                ))}
+              </div>
+              <p className="text-sm text-slate-500 dark:text-slate-400 truncate mt-0.5">{user?.email || user?.phone}</p>
+            </div>
           </div>
+
           {!user?.mfaEnabled && (
-            <button className="btn-primary" onClick={setupMfa}>Configure TOTP MFA</button>
+            <button className="btn-primary shrink-0" onClick={setupMfa}>Configure TOTP MFA</button>
           )}
         </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Email</p>
+            <p className="font-medium text-slate-900 dark:text-white mt-1 break-all">{user?.email || '—'}</p>
+          </div>
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Phone</p>
+            <p className="font-medium text-slate-900 dark:text-white mt-1">{user?.phone || '—'}</p>
+          </div>
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active Workspace</p>
+            <p className="font-medium text-slate-900 dark:text-white mt-1 truncate">
+              {activeOrg ? activeOrg.name : user?.isPlatformAdmin ? 'Platform Control' : 'None'}
+            </p>
+          </div>
+          <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Security Status</p>
+            <p className="font-medium text-slate-900 dark:text-white mt-1">
+              MFA: <span className={user?.mfaEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>{user?.mfaEnabled ? 'Enabled' : 'Disabled'}</span>
+            </p>
+          </div>
+        </div>
+
+        {(memberships || []).length > 0 && (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Organization Memberships</p>
+            <div className="flex flex-wrap gap-2">
+              {memberships.map((m) => (
+                <div key={m.organization_id} className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs flex items-center gap-2">
+                  <span className="font-semibold text-slate-900 dark:text-white">{m.organization_name}</span>
+                  {m.is_org_admin && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 text-[10px] font-semibold">Admin</span>}
+                  {m.jobTitle && <span className="text-slate-500">· {m.jobTitle}</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {mfaSetup && (
           <form onSubmit={enableMfa} className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-3">
             <p className="text-xs">Add this secret key to your authenticator app: <code className="font-mono font-bold">{mfaSetup.secret}</code></p>
-            <div className="flex gap-2 max-w-xs">
+            <div className="flex flex-wrap gap-2 max-w-xs">
               <input className="input-field" required maxLength={6} placeholder="6-digit code" value={totpCode} onChange={(e) => setTotpCode(e.target.value)} />
               <button className="btn-primary">Verify</button>
             </div>

@@ -55,7 +55,15 @@ export async function apiRequest(path, options = {}) {
   const contentType = res.headers.get('content-type') || '';
   const data = contentType.includes('application/json') ? await res.json() : await res.text();
   if (!res.ok) {
-    const message = data?.error?.message || data?.message || `Request failed (${res.status})`;
+    let message = data?.error?.message || data?.message || `Request failed (${res.status})`;
+    const fieldErrors = data?.error?.details?.fieldErrors;
+    if (fieldErrors && typeof fieldErrors === 'object') {
+      const detailsList = Object.entries(fieldErrors)
+        .flatMap(([field, msgs]) => (Array.isArray(msgs) ? msgs.map((m) => `${field}: ${m}`) : []));
+      if (detailsList.length > 0) {
+        message = detailsList.join(' · ');
+      }
+    }
     const err = new Error(message);
     err.code = data?.error?.code;
     err.status = res.status;

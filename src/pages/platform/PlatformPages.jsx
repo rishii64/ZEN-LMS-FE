@@ -28,7 +28,11 @@ export function PlatformTenantsPage() {
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ['platform'] });
       setOpen(false);
-      addToast({ title: 'Organization onboarded', message: `Invite token: ${res.invitationToken}`, type: 'success' });
+      const token = res.invitationToken || res.inviteToken;
+      const msg = res.adminUser
+        ? `Admin ${res.adminUser.email} created.${token ? ` Invite token: ${token}` : ''}`
+        : `Invite token: ${token}`;
+      addToast({ title: 'Organization onboarded', message: msg, type: 'success' });
     },
     onError: (err) => addToast({ title: 'Error', message: err.message, type: 'error' })
   });
@@ -99,14 +103,25 @@ export function PlatformTenantsPage() {
             createMutation.mutate({
               ...form,
               planId,
-              adminTemporaryPassword: form.adminTemporaryPassword || undefined
+              adminTemporaryPassword: form.adminTemporaryPassword?.trim() || undefined
             });
           }}
           className="grid grid-cols-1 sm:grid-cols-2 gap-4"
         >
           <div>
             <label className="block text-xs font-semibold mb-1">Organization Name</label>
-            <input className="input-field" required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value, slug: e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-') })} />
+            <input
+              className="input-field"
+              required
+              value={form.name}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  name: e.target.value,
+                  slug: e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
+                })
+              }
+            />
           </div>
           <div>
             <label className="block text-xs font-semibold mb-1">Unique Slug</label>
@@ -148,8 +163,8 @@ export function PlatformTenantsPage() {
             <input type="email" className="input-field" required value={form.adminEmail} onChange={(e) => setForm({ ...form, adminEmail: e.target.value })} />
           </div>
           <div className="sm:col-span-2">
-            <label className="block text-xs font-semibold mb-1">Temporary Password (optional — leave empty to invite via token)</label>
-            <PasswordInput value={form.adminTemporaryPassword} onChange={(e) => setForm({ ...form, adminTemporaryPassword: e.target.value })} placeholder="Leave empty to invite via token" />
+            <label className="block text-xs font-semibold mb-1">Temporary Password (optional, min 8 chars — leave empty to invite via token)</label>
+            <PasswordInput minLength={8} value={form.adminTemporaryPassword} onChange={(e) => setForm({ ...form, adminTemporaryPassword: e.target.value })} placeholder="Min 8 characters, or leave empty to invite via token" />
           </div>
           <div className="sm:col-span-2 flex justify-end gap-2 pt-2">
             <button type="button" className="btn-secondary" onClick={() => setOpen(false)}>Cancel</button>
@@ -238,6 +253,25 @@ export function PlatformSettingsPage() {
         <textarea className="input-field" rows={2} required placeholder="Message for all tenants..." value={body} onChange={(e) => setBody(e.target.value)} />
         <button className="btn-primary">Publish Announcement</button>
       </form>
+
+      {(annQuery.data?.data || []).length > 0 && (
+        <div className="card p-5 space-y-2.5">
+          <h3 className="text-sm font-semibold">Recent Announcements</h3>
+          <div className="space-y-2">
+            {(annQuery.data?.data || []).map((a) => (
+              <div key={a.id} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/60 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-white">{a.title}</p>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">{a.body}</p>
+                </div>
+                <span className="text-[11px] text-slate-400 shrink-0">
+                  {a.published_at ? new Date(a.published_at).toLocaleDateString() : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <DataTable
         data={auditQuery.data?.data || []}
