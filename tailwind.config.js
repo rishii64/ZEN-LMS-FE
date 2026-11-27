@@ -1,19 +1,19 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: 'class',
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
+  content: ['./index.html', './src/**/*.{js,jsx}'],
   theme: {
     extend: {
       colors: {
-        tenant: {
-          primary: 'var(--tenant-primary, #2563eb)',
-          secondary: 'var(--tenant-secondary, #1e40af)',
+        brand: {
+          DEFAULT: 'var(--brand-primary, #2563eb)',
+          secondary: 'var(--brand-secondary, #0f172a)'
         }
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif']
       }
-    },
+    }
   },
-  plugins: [],
-}
+  plugins: []
+};
